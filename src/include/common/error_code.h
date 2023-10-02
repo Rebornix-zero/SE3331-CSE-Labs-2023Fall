@@ -12,6 +12,7 @@ enum class ErrorType {
 
   /** There is no resource left  */
   OUT_OF_RESOURCE = 2,
+  
   /** Invalid exception type.*/
   INVALID = 3,
 
