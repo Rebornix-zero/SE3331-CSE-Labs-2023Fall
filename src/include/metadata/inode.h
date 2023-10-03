@@ -223,6 +223,10 @@ public:
     this->blocks[this->nblocks - 1] = KInvalidBlockID;
   }
 
+  bool can_indirect() {
+    return this->blocks[this->nblocks - 1] != KInvalidBlockID;
+  }
+
   auto begin() -> InodeIterator;
   auto end() -> InodeIterator;
 
