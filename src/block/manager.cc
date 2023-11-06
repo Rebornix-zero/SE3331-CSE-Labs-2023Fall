@@ -76,12 +76,13 @@ BlockManager::BlockManager(const std::string &file, usize block_cnt)
   CHFS_ASSERT(this->block_data != MAP_FAILED, "Failed to mmap the data");
 }
 
-BlockManager::BlockManager(const std::string &file, usize block_cnt, bool is_log_enabled)
+BlockManager::BlockManager(const std::string &file, usize block_cnt,
+                           bool is_log_enabled)
     : file_name_(file), block_cnt(block_cnt), in_memory(false) {
   this->write_fail_cnt = 0;
   this->maybe_failed = false;
   // TODO: Implement this function.
-  UNIMPLEMENTED();    
+  UNIMPLEMENTED();
 }
 
 auto BlockManager::write_block(block_id_t block_id, const u8 *data)
@@ -92,11 +93,26 @@ auto BlockManager::write_block(block_id_t block_id, const u8 *data)
       return ErrorType::INVALID;
     }
   }
-  
+
+  // // TODO: Implement this function.
+  // UNIMPLEMENTED();
+  // this->write_fail_cnt++;
 
   // TODO: Implement this function.
-  UNIMPLEMENTED();
-  this->write_fail_cnt++;
+  CHFS_ASSERT((block_id < this->block_cnt) && (block_id >= 0),
+              "the block_id is over!");
+  u64 offset = block_id * this->block_sz;
+
+  if (this->in_memory) {
+    CHFS_ASSERT(memcpy(this->block_data + offset, data, this->block_sz) !=
+                    nullptr,
+                "memcpy error!");
+  } else {
+    CHFS_ASSERT(lseek(this->fd, offset, SEEK_SET) != -1, "lseek error!");
+    CHFS_ASSERT(write(this->fd, data, this->block_sz) == this->block_sz,
+                "write error!");
+  }
+
   return KNullOk;
 }
 
@@ -110,25 +126,66 @@ auto BlockManager::write_partial_block(block_id_t block_id, const u8 *data,
     }
   }
 
+  // // TODO: Implement this function.
+  // UNIMPLEMENTED();
+  // this->write_fail_cnt++;
+
   // TODO: Implement this function.
-  UNIMPLEMENTED();
-  this->write_fail_cnt++;
+  CHFS_ASSERT((block_id < this->block_cnt) && (block_id >= 0),
+              "the block_id is over!");
+  u64 total_offset = block_id * this->block_sz + offset;
+
+  if (this->in_memory) {
+    CHFS_ASSERT(memcpy(this->block_data + total_offset, data, len) != nullptr,
+                "memcpy error!");
+  } else {
+    CHFS_ASSERT(lseek(this->fd, total_offset, SEEK_SET) != -1, "lseek error!");
+    CHFS_ASSERT(write(this->fd, data, len) == len, "write error!");
+  }
+
   return KNullOk;
 }
 
 auto BlockManager::read_block(block_id_t block_id, u8 *data) -> ChfsNullResult {
 
   // TODO: Implement this function.
-  UNIMPLEMENTED();
+  CHFS_ASSERT((block_id < this->block_cnt) && (block_id >= 0),
+              "the block_id is over!");
+  u64 offset = block_id * this->block_sz;
+
+  if (this->in_memory) {
+    CHFS_ASSERT(memcpy(data, this->block_data + offset, this->block_sz) !=
+                    nullptr,
+                "memcpy error!");
+  } else {
+    CHFS_ASSERT(lseek(this->fd, offset, SEEK_SET) != -1, "lseek error!");
+    CHFS_ASSERT(read(this->fd, data, this->block_sz) == this->block_sz,
+                "read error!");
+  }
 
   return KNullOk;
 }
 
 auto BlockManager::zero_block(block_id_t block_id) -> ChfsNullResult {
-  
-  // TODO: Implement this function.
-  UNIMPLEMENTED();
 
+  // TODO: Implement this function.
+  CHFS_ASSERT((block_id < this->block_cnt) && (block_id >= 0),
+              "the block_id is over!");
+  u64 offset = block_id * this->block_sz;
+  u8 *zero_block = new u8[this->block_sz];
+  memset(zero_block, 0, this->block_sz);
+
+  if (this->in_memory) {
+    CHFS_ASSERT(memcpy(this->block_data + offset, zero_block, this->block_sz) !=
+                    nullptr,
+                "memcpy error!");
+  } else {
+    CHFS_ASSERT(lseek(this->fd, offset, SEEK_SET) != -1, "lseek error!");
+    CHFS_ASSERT(write(this->fd, zero_block, this->block_sz) == this->block_sz,
+                "write error!");
+  }
+
+  delete[] zero_block;
   return KNullOk;
 }
 
@@ -138,14 +195,15 @@ auto BlockManager::sync(block_id_t block_id) -> ChfsNullResult {
   }
 
   auto res = msync(this->block_data + block_id * this->block_sz, this->block_sz,
-        MS_SYNC | MS_INVALIDATE);
+                   MS_SYNC | MS_INVALIDATE);
   if (res != 0)
     return ChfsNullResult(ErrorType::INVALID);
   return KNullOk;
 }
 
 auto BlockManager::flush() -> ChfsNullResult {
-  auto res = msync(this->block_data, this->block_sz * this->block_cnt, MS_SYNC | MS_INVALIDATE);
+  auto res = msync(this->block_data, this->block_sz * this->block_cnt,
+                   MS_SYNC | MS_INVALIDATE);
   if (res != 0)
     return ChfsNullResult(ErrorType::INVALID);
   return KNullOk;
