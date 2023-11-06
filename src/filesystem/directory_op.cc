@@ -191,11 +191,19 @@ auto FileOperation::unlink(inode_id_t parent, const char *name)
 
         ChfsNullResult res = remove_file(it->id);
         if (res.is_ok()) {
+          list.erase(it);
+          std::string list_stirng = dir_list_to_string(list);
+          std::vector<u8> buffer(list_stirng.begin(), list_stirng.end());
+          write_file(parent, buffer);
           return KNullOk;
         }
       } else {
         ChfsNullResult res = remove_file(it->id);
         if (res.is_ok()) {
+          list.erase(it);
+          std::string list_stirng = dir_list_to_string(list);
+          std::vector<u8> buffer(list_stirng.begin(), list_stirng.end());
+          write_file(parent, buffer);
           return KNullOk;
         }
       }
