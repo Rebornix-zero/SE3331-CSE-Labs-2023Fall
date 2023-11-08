@@ -123,70 +123,166 @@ MetadataServer::MetadataServer(std::string const &address, u16 port,
 auto MetadataServer::mknode(u8 type, inode_id_t parent, const std::string &name)
     -> inode_id_t {
   // TODO: Implement this function.
-  UNIMPLEMENTED();
-
-  return 0;
+  ChfsResult<inode_id_t> mknode_result =
+      this->operation_->mk_helper(parent, name.data(), (chfs::InodeType)type);
+  if (mknode_result.is_ok()) {
+    return mknode_result.unwrap();
+  } else {
+    // FIXME: how to handle error?
+    return -1;
+  }
 }
 
 // {Your code here}
 auto MetadataServer::unlink(inode_id_t parent, const std::string &name)
     -> bool {
   // TODO: Implement this function.
-  UNIMPLEMENTED();
-
-  return false;
+  ChfsResult<inode_id_t> lookup_result =
+      this->operation_->lookup(parent, name.data());
+  if (lookup_result.is_err()) {
+    return false;
+  }
+  inode_id_t unlink_inode_id = lookup_result.unwrap();
+  ChfsResult<InodeType> gettype_res =
+      this->operation_->gettype(unlink_inode_id);
+  if (gettype_res.is_err()) {
+    return false;
+  }
+  InodeType unlink_inode_type = gettype_res.unwrap();
+  if (unlink_inode_type == InodeType::Directory) {
+    ChfsNullResult unlink_res = this->operation_->unlink(parent, name.data());
+    if (unlink_res.is_err())
+      return false;
+  } else {
+    // free the remote block
+    std::vector<BlockInfo> free_block_list;
+    this->operation_->regular_get_blockinfo_list(unlink_inode_id,
+                                                 free_block_list);
+    for (auto item : free_block_list) {
+      auto mid = std::get<1>(item);
+      auto bid = std::get<0>(item);
+      auto res = (this->clients_).at(mid)->call("free_block", bid);
+      if (res.is_err()) {
+        return false;
+      }
+      bool res_value = res.unwrap()->as<bool>();
+      if (!res_value) {
+        return false;
+      }
+    }
+    // free inode and delete entry in parent
+    ChfsNullResult unlink_res =
+        this->operation_->regular_unlink_wo_block(parent, name);
+    if (unlink_res.is_err())
+      return false;
+  }
+  return true;
 }
 
 // {Your code here}
 auto MetadataServer::lookup(inode_id_t parent, const std::string &name)
     -> inode_id_t {
   // TODO: Implement this function.
-  UNIMPLEMENTED();
+  ChfsResult<inode_id_t> lookup_result =
+      this->operation_->lookup(parent, name.data());
 
-  return 0;
+  if (lookup_result.is_ok()) {
+    return lookup_result.unwrap();
+  } else {
+    // FIXME: how to handle error
+    return 0;
+  }
 }
 
 // {Your code here}
 auto MetadataServer::get_block_map(inode_id_t id) -> std::vector<BlockInfo> {
   // TODO: Implement this function.
-  UNIMPLEMENTED();
-
-  return {};
+  std::vector<BlockInfo> result;
+  ChfsNullResult get_map_res =
+      this->operation_->regular_get_blockinfo_list(id, result);
+  if (get_map_res.is_err()) {
+    // FIXME: how to handle error
+    return result;
+  } else {
+    return result;
+  }
 }
 
 // {Your code here}
 auto MetadataServer::allocate_block(inode_id_t id) -> BlockInfo {
   // TODO: Implement this function.
-  UNIMPLEMENTED();
-
-  return {};
+  mac_id_t machine_id = (this->generator).rand(1, this->num_data_servers);
+  auto res = (this->clients_).at(machine_id)->call("alloc_block");
+  if (res.is_err()) {
+    // FIXME: how to handle error
+    return BlockInfo(0, 0, 0);
+  }
+  auto [block_id, version] =
+      res.unwrap()->as<std::pair<block_id_t, version_t>>();
+  // TODO:
+  BlockInfo blockinfo(block_id, machine_id, version);
+  // FIXME: how to handle error
+  this->operation_->regular_add_blockinfo(id, blockinfo);
+  return blockinfo;
 }
 
 // {Your code here}
 auto MetadataServer::free_block(inode_id_t id, block_id_t block_id,
                                 mac_id_t machine_id) -> bool {
   // TODO: Implement this function.
-  UNIMPLEMENTED();
-
-  return false;
+  auto res = (this->clients_).at(machine_id)->call("free_block", block_id);
+  if (res.is_err()) {
+    return false;
+  }
+  bool res_value = res.unwrap()->as<bool>();
+  if (!res_value) {
+    return false;
+  }
+  ChfsNullResult inode_modify_res =
+      this->operation_->regular_remove_blockinfo(id, block_id, machine_id);
+  if (inode_modify_res.is_err()) {
+    return false;
+  }
+  return true;
 }
 
 // {Your code here}
 auto MetadataServer::readdir(inode_id_t node)
     -> std::vector<std::pair<std::string, inode_id_t>> {
   // TODO: Implement this function.
-  UNIMPLEMENTED();
-
-  return {};
+  std::list<chfs::DirectoryEntry> list;
+  ChfsNullResult read_dir_result =
+      read_directory((this->operation_).get(), node, list);
+  if (read_dir_result.is_ok()) {
+    std::vector<std::pair<std::string, inode_id_t>> return_value;
+    for (auto it = list.begin(); it != list.end(); ++it) {
+      auto item = std::pair<std::string, inode_id_t>(it->name, it->id);
+      return_value.push_back(item);
+    }
+    return return_value;
+  } else {
+    // FIXME: how to handle error
+    std::vector<std::pair<std::string, inode_id_t>> return_value;
+    return return_value;
+  }
 }
 
 // {Your code here}
 auto MetadataServer::get_type_attr(inode_id_t id)
     -> std::tuple<u64, u64, u64, u64, u8> {
-  // TODO: Implement this function.
-  UNIMPLEMENTED();
-
-  return {};
+  // TODO: Implement this function.Tuple of <size, atime, mtime, ctime, type>
+  ChfsResult<std::pair<InodeType, FileAttr>> get_type_attr_result =
+      this->operation_->get_type_attr(id);
+  if (get_type_attr_result.is_ok()) {
+    std::pair<InodeType, FileAttr> pair_object = get_type_attr_result.unwrap();
+    return std::tuple<u64, u64, u64, u64, u8>(
+        pair_object.second.size, pair_object.second.atime,
+        pair_object.second.mtime, pair_object.second.ctime,
+        (u8)(pair_object.first));
+  } else {
+    // FIXME: how to handle error
+    return std::tuple<u64, u64, u64, u64, u8>(0, 0, 0, 0, 0);
+  }
 }
 
 auto MetadataServer::reg_server(const std::string &address, u16 port,

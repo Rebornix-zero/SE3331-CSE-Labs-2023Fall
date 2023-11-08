@@ -14,13 +14,31 @@ auto DataServer::initialize(std::string const &data_path) {
 
   auto bm = std::shared_ptr<BlockManager>(
       new BlockManager(data_path, KDefaultBlockCnt));
+
+  //
+  u64 versions_per_block = DiskBlockSize / sizeof(version_t);
+  u64 version_block_num = (KDefaultBlockCnt) / versions_per_block;
+  if (KDefaultBlockCnt % versions_per_block != 0) {
+    version_block_num += 1;
+  }
+  //
+
   if (is_initialized) {
-    block_allocator_ = std::make_shared<BlockAllocator>(bm, 0, false);
+    block_allocator_ =
+        std::make_shared<BlockAllocator>(bm, version_block_num, false);
   } else {
     // We need to reserve some blocks for storing the version of each block
-    block_allocator_ =
-        std::shared_ptr<BlockAllocator>(new BlockAllocator(bm, 0, true));
+
+    block_allocator_ = std::shared_ptr<BlockAllocator>(
+        new BlockAllocator(bm, version_block_num, true));
   }
+
+  //
+  for (int version_block_id = 0; version_block_id < version_block_num;
+       ++version_block_id) {
+    this->block_allocator_->bm->zero_block(version_block_id);
+  }
+  //
 
   // Initialize the RPC server and bind all handlers
   server_->bind("read_data", [this](block_id_t block_id, usize offset,
@@ -100,8 +118,24 @@ auto DataServer::alloc_block() -> std::pair<block_id_t, version_t> {
   // TODO: Implement this function.
   ChfsResult<block_id_t> result = this->block_allocator_->allocate();
   if (result.is_ok()) {
+    block_id_t block_id = result.unwrap();
+    u64 versions_per_block =
+        this->block_allocator_->bm->block_size() / sizeof(version_t);
+    u64 version_block_id = block_id / versions_per_block;
+    u64 version_block_offset =
+        (block_id % versions_per_block) * sizeof(version_t);
+
+    std::vector<u8> buffer(this->block_allocator_->bm->block_size());
+    this->block_allocator_->bm->read_block(version_block_id, buffer.data());
+    version_t *verison_ptr =
+        reinterpret_cast<version_t *>(buffer.data() + version_block_offset);
+    *verison_ptr = *verison_ptr + 1;
+    this->block_allocator_->bm->write_partial_block(
+        version_block_id, reinterpret_cast<u8 *>(verison_ptr),
+        version_block_offset, sizeof(version_t));
+
     std::pair<block_id_t, version_t> return_value =
-        std::make_pair<block_id_t, version_t>(result.unwrap(), 1);
+        std::make_pair(block_id, (*verison_ptr));
     return return_value;
   } else {
     // FIXME: what should I do if there is an error?
@@ -115,9 +149,23 @@ auto DataServer::alloc_block() -> std::pair<block_id_t, version_t> {
 auto DataServer::free_block(block_id_t block_id) -> bool {
   // TODO: Implement this function.
   ChfsNullResult result = this->block_allocator_->deallocate(block_id);
-  if (result.is_ok())
+  if (result.is_ok()) {
+    u64 versions_per_block =
+        this->block_allocator_->bm->block_size() / sizeof(version_t);
+    u64 version_block_id = block_id / versions_per_block;
+    u64 version_block_offset =
+        (block_id % versions_per_block) * sizeof(version_t);
+
+    std::vector<u8> buffer(this->block_allocator_->bm->block_size());
+    this->block_allocator_->bm->read_block(version_block_id, buffer.data());
+    version_t *verison_ptr =
+        reinterpret_cast<version_t *>(buffer.data() + version_block_offset);
+    *verison_ptr = *verison_ptr + 1;
+    this->block_allocator_->bm->write_partial_block(
+        version_block_id, reinterpret_cast<u8 *>(verison_ptr),
+        version_block_offset, sizeof(version_t));
     return true;
-  else
+  } else
     return false;
 }
 } // namespace chfs

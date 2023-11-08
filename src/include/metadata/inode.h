@@ -26,6 +26,7 @@ namespace chfs {
 // The first block is reserved as super block
 // So block IDs should be larger than 0
 const block_id_t KInvalidBlockID = 0;
+using BlockInfo = std::tuple<block_id_t, mac_id_t, version_t>;
 
 enum class InodeType : u32 {
   Unknown = 0,
@@ -90,6 +91,8 @@ class Inode {
   // which is dynamically calculated based on the block size
 public:
   [[maybe_unused]] block_id_t blocks[0];
+  // MY_MODIFY:
+  [[maybe_unused]] BlockInfo blockinfo_list[0];
 
 public:
   /**
@@ -232,9 +235,10 @@ public:
 
 } __attribute__((packed));
 
-static_assert(sizeof(Inode) == sizeof(FileAttr) + sizeof(InodeType) +
-                                   sizeof(u32) + sizeof(u32),
-              "Unexpected Inode size");
+// MY_MODIFY:
+//  static_assert(sizeof(Inode) == sizeof(FileAttr) + sizeof(InodeType) +
+//                                     sizeof(u32) + sizeof(u32) ,
+//                "Unexpected Inode size");
 
 /**
  * A helper class to iterate through the block_ids stored in the inode

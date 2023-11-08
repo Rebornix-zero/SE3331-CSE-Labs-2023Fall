@@ -1,5 +1,6 @@
 #include <ctime>
 
+#include "filesystem/directory_op.h"
 #include "filesystem/operations.h"
 
 namespace chfs {
@@ -341,6 +342,30 @@ auto FileOperation::resize(inode_id_t id, u64 sz) -> ChfsResult<FileAttr> {
 
   attr.size = sz;
   return ChfsResult<FileAttr>(attr);
+}
+
+// MY_MODIFY:
+ChfsNullResult FileOperation::regular_unlink_wo_block(inode_id_t parent,
+                                                      const std::string &name) {
+  std::list<DirectoryEntry> list;
+  read_directory(this, parent, list);
+  for (auto it = list.begin(); it != list.end(); ++it) {
+    if (it->name == name) {
+      // NOTE: don't need to free the dataserver blocks
+      //  free the inode
+      ChfsNullResult free_inode_res = this->inode_manager_->free_inode(it->id);
+      if (free_inode_res.is_err())
+        return ChfsNullResult(ErrorType::DONE);
+      // delete entry in parent
+      list.erase(it);
+      std::string list_string = dir_list_to_string(list);
+      std::vector<u8> buffer(list_string.begin(), list_string.end());
+      write_file(parent, buffer);
+      // FIXME: how to handle error?
+      return (KNullOk);
+    }
+  }
+  return ChfsNullResult(ErrorType::NotExist);
 }
 
 } // namespace chfs

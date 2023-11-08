@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <regex>
 #include <sstream>
+#include <string>
 #include <vector>
 
 #include "filesystem/directory_op.h"
@@ -58,7 +59,6 @@ void parse_directory(std::string &src, std::list<DirectoryEntry> &list) {
   if (src.empty()) {
     return;
   }
-
   std::regex re("[:/]");
   std::sregex_token_iterator it(src.begin(), src.end(), re, -1);
   std::sregex_token_iterator end;
@@ -210,7 +210,6 @@ auto FileOperation::unlink(inode_id_t parent, const char *name)
     }
   }
   return ChfsNullResult(ErrorType::NotExist);
-  ;
 }
 
 } // namespace chfs
