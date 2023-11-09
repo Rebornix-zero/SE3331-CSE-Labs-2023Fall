@@ -1,10 +1,10 @@
+#include "filesystem/directory_op.h"
+#include "common/config.h"
 #include <algorithm>
 #include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
-
-#include "filesystem/directory_op.h"
 
 namespace chfs {
 
@@ -138,6 +138,7 @@ auto FileOperation::mk_helper(inode_id_t id, const char *name, InodeType type)
   // 3. Append the new entry to the parent directory.
   std::list<DirectoryEntry> list;
   std::string filename(name, strlen(name));
+
   read_directory(this, id, list);
   for (std::list<DirectoryEntry>::iterator it = list.begin(); it != list.end();
        ++it) {
@@ -163,7 +164,6 @@ auto FileOperation::mk_helper(inode_id_t id, const char *name, InodeType type)
   std::string list_stirng = dir_list_to_string(list);
   std::vector<u8> buffer(list_stirng.begin(), list_stirng.end());
   write_file(id, buffer);
-
   return ChfsResult<inode_id_t>(inode_id.unwrap());
 }
 

@@ -192,115 +192,16 @@ public:
 
   // MY_MODIFY:
   ChfsNullResult regular_add_blockinfo(inode_id_t regular_id,
-                                       BlockInfo &blockinfo) {
-    const chfs::usize block_size = this->block_manager_->block_size();
-    usize old_block_num = 0;
-    usize new_block_num = 0;
-    u64 original_file_sz = 0;
-    block_id_t regular_block_id = 0;
-
-    // 1.read the inode
-    std::vector<u8> regular_inode(block_size);
-    auto inode_p = reinterpret_cast<Inode *>(regular_inode.data());
-    ChfsResult<block_id_t> get_inode_res =
-        this->inode_manager_->read_inode(regular_id, regular_inode);
-    if (get_inode_res.is_err()) {
-      return ChfsNullResult(ErrorType::NotExist);
-    } else {
-      regular_block_id = get_inode_res.unwrap();
-    }
-
-    // 2. blockinfo add
-    original_file_sz = inode_p->get_size();
-    old_block_num = original_file_sz / block_size;
-    new_block_num = old_block_num + 1;
-    if (new_block_num * sizeof(BlockInfo) + sizeof(Inode) > block_size) {
-      return ChfsNullResult(ErrorType::OUT_OF_RESOURCE);
-    }
-    inode_p->blockinfo_list[old_block_num] = blockinfo;
-
-    // 3. renew inode info
-    inode_p->inner_attr.size = new_block_num * block_size;
-    inode_p->inner_attr.set_all_time(time(0));
-
-    // 4. flush to disk
-    ChfsNullResult write_res = this->block_manager_->write_block(
-        regular_block_id, regular_inode.data());
-    if (write_res.is_err()) {
-      return ChfsNullResult(ErrorType::DONE);
-    }
-    return KNullOk;
-  }
-
+                                       BlockInfo &blockinfo);
   // MY_MODIFY:
   ChfsNullResult regular_remove_blockinfo(inode_id_t regular_id,
                                           block_id_t block_id,
-                                          mac_id_t machine_id) {
-    const auto block_size = this->block_manager_->block_size();
-    usize block_num = 0;
-    block_id_t inode_block_id = 0;
-
-    std::vector<u8> regular_inode(block_size);
-    auto inode_p = reinterpret_cast<Inode *>(regular_inode.data());
-
-    auto inode_res =
-        this->inode_manager_->read_inode(regular_id, regular_inode);
-    if (inode_res.is_err()) {
-      return ChfsNullResult(ErrorType::NotExist);
-    }
-    inode_block_id = inode_res.unwrap();
-    block_num = inode_p->get_size() / block_size;
-
-    // get blockinfo_list
-    std::vector<BlockInfo> blockinfo_list;
-    for (u32 i = 0; i < block_num; ++i) {
-      auto item_block_id = std::get<0>(inode_p->blockinfo_list[i]);
-      auto item_mac_id = std::get<1>(inode_p->blockinfo_list[i]);
-      if (item_block_id == block_id && item_mac_id == machine_id)
-        continue;
-      blockinfo_list.push_back(inode_p->blockinfo_list[i]);
-    }
-    u32 blockinfo_list_size = blockinfo_list.size();
-
-    // modify inode buffer
-    inode_p->inner_attr.size = block_size * blockinfo_list_size;
-    inode_p->inner_attr.set_all_time(time(0));
-    for (u32 i = 0; i < blockinfo_list_size; ++i) {
-      inode_p->blockinfo_list[i] = blockinfo_list[i];
-    }
-
-    // write back
-    auto write_res =
-        this->block_manager_->write_block(inode_block_id, regular_inode.data());
-    if (write_res.is_err()) {
-      return ChfsNullResult(ErrorType::DONE);
-    }
-    return KNullOk;
-  }
+                                          mac_id_t machine_id);
 
   // MY_MODIFY:
   ChfsNullResult
   regular_get_blockinfo_list(inode_id_t regular_id,
-                             std::vector<BlockInfo> &return_data) {
-    const auto block_size = this->block_manager_->block_size();
-    usize block_num = 0;
-    std::vector<u8> regular_inode(block_size);
-    auto inode_p = reinterpret_cast<Inode *>(regular_inode.data());
-
-    auto inode_res =
-        this->inode_manager_->read_inode(regular_id, regular_inode);
-    if (inode_res.is_err()) {
-      return ChfsNullResult(ErrorType::NotExist);
-    }
-    block_num = inode_p->get_size() / block_size;
-
-    // get blockinfo_list
-    for (u32 i = 0; i < block_num; ++i) {
-      return_data.push_back(inode_p->blockinfo_list[i]);
-    }
-    return KNullOk;
-  }
-
+                             std::vector<BlockInfo> &return_data);
   // MY_MODIFY:
   ChfsNullResult regular_unlink_wo_block(inode_id_t parent,
                                          const std::string &name);
