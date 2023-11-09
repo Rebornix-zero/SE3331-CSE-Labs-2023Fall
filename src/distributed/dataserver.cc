@@ -71,17 +71,38 @@ DataServer::DataServer(std::string const &address, u16 port,
 
 DataServer::~DataServer() { server_.reset(); }
 
-// FIXME: WHAT IS THE VERSION???
 // {Your code here}
 auto DataServer::read_data(block_id_t block_id, usize offset, usize len,
                            version_t version) -> std::vector<u8> {
   // TODO: Implement this function.
   usize block_size = this->block_allocator_->bm->block_size();
+  // the read length is over
   if (offset + len - 1 > block_size - 1) {
     std::vector<u8> zero_data(0);
     return zero_data;
   }
+  // check the version
   std::vector<u8> buffer(block_size);
+
+  u64 version_per_block = block_size / sizeof(version_t);
+  u64 version_block_id = block_id / version_per_block;
+  u64 version_block_offset = (block_id % version_per_block) * sizeof(version_t);
+
+  ChfsNullResult version_read_res =
+      this->block_allocator_->bm->read_block(version_block_id, buffer.data());
+  if (version_read_res.is_err()) {
+    std::vector<u8> zero_data(0);
+    return zero_data;
+  }
+  version_t current_version =
+      *(reinterpret_cast<version_t *>(buffer.data() + version_block_offset));
+  if (current_version > version) {
+    // NOTE: Invalid version!
+    std::vector<u8> zero_data(0);
+    return zero_data;
+  }
+
+  // version is valid, read
   ChfsNullResult result =
       this->block_allocator_->bm->read_block(block_id, buffer.data());
   if (result.is_ok()) {
@@ -112,13 +133,13 @@ auto DataServer::write_data(block_id_t block_id, usize offset,
     return false;
 }
 
-// FIXME: WHERE IS THE VERSION???
 //  {Your code here}
 auto DataServer::alloc_block() -> std::pair<block_id_t, version_t> {
   // TODO: Implement this function.
   ChfsResult<block_id_t> result = this->block_allocator_->allocate();
   if (result.is_ok()) {
     block_id_t block_id = result.unwrap();
+    // get the block id and renew its version
     u64 versions_per_block =
         this->block_allocator_->bm->block_size() / sizeof(version_t);
     u64 version_block_id = block_id / versions_per_block;
@@ -130,17 +151,16 @@ auto DataServer::alloc_block() -> std::pair<block_id_t, version_t> {
     version_t *verison_ptr =
         reinterpret_cast<version_t *>(buffer.data() + version_block_offset);
     *verison_ptr = *verison_ptr + 1;
+    // persist the modification of version
     this->block_allocator_->bm->write_partial_block(
         version_block_id, reinterpret_cast<u8 *>(verison_ptr),
         version_block_offset, sizeof(version_t));
 
-    std::pair<block_id_t, version_t> return_value =
-        std::make_pair(block_id, (*verison_ptr));
+    std::pair<block_id_t, version_t> return_value(block_id, (*verison_ptr));
     return return_value;
   } else {
     // FIXME: what should I do if there is an error?
-    std::pair<block_id_t, version_t> return_value =
-        std::make_pair<block_id_t, version_t>(0, 0);
+    std::pair<block_id_t, version_t> return_value(0, 0);
     return return_value;
   }
 }

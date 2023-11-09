@@ -128,8 +128,8 @@ auto MetadataServer::mknode(u8 type, inode_id_t parent, const std::string &name)
   if (mknode_result.is_ok()) {
     return mknode_result.unwrap();
   } else {
-    // FIXME: how to handle error?
-    return -1;
+    // NOTE: if return 0, then error
+    return 0;
   }
 }
 
@@ -189,7 +189,7 @@ auto MetadataServer::lookup(inode_id_t parent, const std::string &name)
   if (lookup_result.is_ok()) {
     return lookup_result.unwrap();
   } else {
-    // FIXME: how to handle error
+    // NOTE: if return 0, then error
     return 0;
   }
 }
@@ -270,7 +270,8 @@ auto MetadataServer::readdir(inode_id_t node)
 // {Your code here}
 auto MetadataServer::get_type_attr(inode_id_t id)
     -> std::tuple<u64, u64, u64, u64, u8> {
-  // TODO: Implement this function.Tuple of <size, atime, mtime, ctime, type>
+  // TODO: Implement this function.
+  // Tuple of <size, atime, mtime, ctime, type>
   ChfsResult<std::pair<InodeType, FileAttr>> get_type_attr_result =
       this->operation_->get_type_attr(id);
   if (get_type_attr_result.is_ok()) {
