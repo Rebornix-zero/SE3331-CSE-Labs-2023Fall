@@ -124,11 +124,21 @@ auto MetadataServer::mknode(u8 type, inode_id_t parent, const std::string &name)
     -> inode_id_t {
   // TODO: Implement this function.
   this->mk_unlink_mutex.lock();
+  if (this->is_log_enabled_) {
+    this->commit_log->checkpoint();
+    this->commit_log->log_num_add();
+  }
   ChfsResult<inode_id_t> mknode_result =
       this->operation_->mk_helper(parent, name.data(), (chfs::InodeType)type);
   this->mk_unlink_mutex.unlock();
 
   if (mknode_result.is_ok()) {
+    if (this->is_log_enabled_) {
+      this->commit_log->commit_log(this->commit_log->log_num);
+    }
+    if (this->may_failed_) {
+      return 0;
+    }
     return mknode_result.unwrap();
   } else {
     // NOTE: if return 0, then error
@@ -142,10 +152,17 @@ auto MetadataServer::unlink(inode_id_t parent, const std::string &name)
   // TODO: Implement this function.
 
   this->mk_unlink_mutex.lock();
+  if (this->is_log_enabled_) {
+    this->commit_log->checkpoint();
+    this->commit_log->log_num_add();
+  }
   // get unlink file inode id
   ChfsResult<inode_id_t> lookup_result =
       this->operation_->lookup(parent, name.data());
   if (lookup_result.is_err()) {
+    if (this->is_log_enabled_) {
+      this->commit_log->commit_log(this->commit_log->log_num);
+    }
     this->mk_unlink_mutex.unlock();
     return false;
   }
@@ -155,6 +172,9 @@ auto MetadataServer::unlink(inode_id_t parent, const std::string &name)
   ChfsResult<InodeType> gettype_res =
       this->operation_->gettype(unlink_inode_id);
   if (gettype_res.is_err()) {
+    if (this->is_log_enabled_) {
+      this->commit_log->commit_log(this->commit_log->log_num);
+    }
     this->mk_unlink_mutex.unlock();
     return false;
   }
@@ -164,6 +184,9 @@ auto MetadataServer::unlink(inode_id_t parent, const std::string &name)
     // can use unlink function in lab1
     ChfsNullResult unlink_res = this->operation_->unlink(parent, name.data());
     if (unlink_res.is_err()) {
+      if (this->is_log_enabled_) {
+        this->commit_log->commit_log(this->commit_log->log_num);
+      }
       this->mk_unlink_mutex.unlock();
       return false;
     }
@@ -178,11 +201,17 @@ auto MetadataServer::unlink(inode_id_t parent, const std::string &name)
       auto bid = std::get<0>(item);
       auto res = (this->clients_).at(mid)->call("free_block", bid);
       if (res.is_err()) {
+        if (this->is_log_enabled_) {
+          this->commit_log->commit_log(this->commit_log->log_num);
+        }
         this->mk_unlink_mutex.unlock();
         return false;
       }
       bool res_value = res.unwrap()->as<bool>();
       if (!res_value) {
+        if (this->is_log_enabled_) {
+          this->commit_log->commit_log(this->commit_log->log_num);
+        }
         this->mk_unlink_mutex.unlock();
         return false;
       }
@@ -191,11 +220,20 @@ auto MetadataServer::unlink(inode_id_t parent, const std::string &name)
     ChfsNullResult unlink_res =
         this->operation_->regular_unlink_wo_block(parent, name);
     if (unlink_res.is_err()) {
+      if (this->is_log_enabled_) {
+        this->commit_log->commit_log(this->commit_log->log_num);
+      }
       this->mk_unlink_mutex.unlock();
       return false;
     }
   }
+  if (this->is_log_enabled_) {
+    this->commit_log->commit_log(this->commit_log->log_num);
+  }
   this->mk_unlink_mutex.unlock();
+  if (this->may_failed_) {
+    return false;
+  }
   return true;
 }
 

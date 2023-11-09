@@ -86,6 +86,7 @@ public:
    * @param is_checkpoint_enabled: Whether to enable the checkpoint.
    * @param may_failed: Whether the metadata server persist data may fail.
    */
+  // NOTE:
   MetadataServer(std::string const &address, u16 port,
                  const std::string &data_path = "/tmp/inode_data",
                  bool is_log_enabled = false,
