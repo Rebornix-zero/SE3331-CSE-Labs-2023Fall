@@ -143,17 +143,20 @@ auto FileOperation::mk_helper(inode_id_t id, const char *name, InodeType type)
   for (std::list<DirectoryEntry>::iterator it = list.begin(); it != list.end();
        ++it) {
     if (it->name == filename) {
+      std::cout << "already exit error" << std::endl;
       return ChfsResult<inode_id_t>(ErrorType::AlreadyExist);
     }
   }
 
   ChfsResult<block_id_t> block_id = block_allocator_->allocate();
   if (block_id.is_err()) {
+    std::cout << "block allocate error" << std::endl;
     return ChfsResult<inode_id_t>(ErrorType::OUT_OF_RESOURCE);
   }
   ChfsResult<inode_id_t> inode_id =
       inode_manager_->allocate_inode(type, block_id.unwrap());
   if (inode_id.is_err()) {
+    std::cout << "inode allocate error error" << std::endl;
     return ChfsResult<inode_id_t>(ErrorType::OUT_OF_RESOURCE);
   }
 
@@ -198,7 +201,9 @@ auto FileOperation::unlink(inode_id_t parent, const char *name)
           return KNullOk;
         }
       } else {
+        // unlink a file
         ChfsNullResult res = remove_file(it->id);
+        // renew the parent dir entry
         if (res.is_ok()) {
           list.erase(it);
           std::string list_stirng = dir_list_to_string(list);

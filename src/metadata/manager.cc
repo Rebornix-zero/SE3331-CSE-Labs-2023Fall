@@ -243,6 +243,7 @@ auto InodeManager::free_inode(inode_id_t id) -> ChfsNullResult {
 
   // simple pre-checks
   if (id >= max_inode_supported - 1) {
+    std::cout << "INVALID_ARG" << std::endl;
     return ChfsNullResult(ErrorType::INVALID_ARG);
   }
 

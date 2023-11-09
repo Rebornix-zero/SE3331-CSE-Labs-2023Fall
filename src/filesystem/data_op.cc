@@ -299,6 +299,12 @@ auto FileOperation::read_file(inode_id_t id) -> ChfsResult<std::vector<u8>> {
     read_sz += sz;
   }
 
+  // std::cout << "read " << id << std::endl;
+  // std::cout << "content size " << content.size() << std::endl;
+  // for (int i = 0; i < content.size(); ++i)
+  //   std::cout << content[i];
+  // std::cout << std::endl;
+
   return ChfsResult<std::vector<u8>>(std::move(content));
 
 err_ret:
@@ -393,11 +399,28 @@ ChfsNullResult FileOperation::regular_unlink_wo_block(inode_id_t parent,
   read_directory(this, parent, list);
   for (auto it = list.begin(); it != list.end(); ++it) {
     if (it->name == name) {
+      inode_id_t inode_id = it->id;
       // NOTE: don't need to free the dataserver blocks
-      //  free the inode
-      ChfsNullResult free_inode_res = this->inode_manager_->free_inode(it->id);
-      if (free_inode_res.is_err())
+      // delete the block
+      auto inode_res = this->inode_manager_->get(inode_id);
+      if (inode_res.is_err()) {
+        std::cout << 1 << std::endl;
+        return ChfsNullResult(ErrorType::NotExist);
+      }
+      auto deallocate_res =
+          this->block_allocator_->deallocate(inode_res.unwrap());
+      if (deallocate_res.is_err()) {
+        std::cout << 2 << std::endl;
         return ChfsNullResult(ErrorType::DONE);
+      }
+
+      //  free the inode
+      ChfsNullResult free_inode_res =
+          this->inode_manager_->free_inode(inode_id);
+      if (free_inode_res.is_err()) {
+        return ChfsNullResult(ErrorType::DONE);
+      }
+
       // delete entry in parent
       list.erase(it);
       std::string list_string = dir_list_to_string(list);

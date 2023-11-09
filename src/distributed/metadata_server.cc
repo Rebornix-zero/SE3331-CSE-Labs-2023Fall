@@ -123,8 +123,11 @@ MetadataServer::MetadataServer(std::string const &address, u16 port,
 auto MetadataServer::mknode(u8 type, inode_id_t parent, const std::string &name)
     -> inode_id_t {
   // TODO: Implement this function.
+  this->mk_unlink_mutex.lock();
   ChfsResult<inode_id_t> mknode_result =
       this->operation_->mk_helper(parent, name.data(), (chfs::InodeType)type);
+  this->mk_unlink_mutex.unlock();
+
   if (mknode_result.is_ok()) {
     return mknode_result.unwrap();
   } else {
@@ -137,22 +140,34 @@ auto MetadataServer::mknode(u8 type, inode_id_t parent, const std::string &name)
 auto MetadataServer::unlink(inode_id_t parent, const std::string &name)
     -> bool {
   // TODO: Implement this function.
+
+  this->mk_unlink_mutex.lock();
+  // get unlink file inode id
   ChfsResult<inode_id_t> lookup_result =
       this->operation_->lookup(parent, name.data());
   if (lookup_result.is_err()) {
+    this->mk_unlink_mutex.unlock();
     return false;
   }
   inode_id_t unlink_inode_id = lookup_result.unwrap();
+
+  // get unlink file inode type
   ChfsResult<InodeType> gettype_res =
       this->operation_->gettype(unlink_inode_id);
   if (gettype_res.is_err()) {
+    this->mk_unlink_mutex.unlock();
     return false;
   }
   InodeType unlink_inode_type = gettype_res.unwrap();
+
   if (unlink_inode_type == InodeType::Directory) {
+    // can use unlink function in lab1
     ChfsNullResult unlink_res = this->operation_->unlink(parent, name.data());
-    if (unlink_res.is_err())
+    if (unlink_res.is_err()) {
+      this->mk_unlink_mutex.unlock();
       return false;
+    }
+
   } else {
     // free the remote block
     std::vector<BlockInfo> free_block_list;
@@ -163,19 +178,24 @@ auto MetadataServer::unlink(inode_id_t parent, const std::string &name)
       auto bid = std::get<0>(item);
       auto res = (this->clients_).at(mid)->call("free_block", bid);
       if (res.is_err()) {
+        this->mk_unlink_mutex.unlock();
         return false;
       }
       bool res_value = res.unwrap()->as<bool>();
       if (!res_value) {
+        this->mk_unlink_mutex.unlock();
         return false;
       }
     }
     // free inode and delete entry in parent
     ChfsNullResult unlink_res =
         this->operation_->regular_unlink_wo_block(parent, name);
-    if (unlink_res.is_err())
+    if (unlink_res.is_err()) {
+      this->mk_unlink_mutex.unlock();
       return false;
+    }
   }
+  this->mk_unlink_mutex.unlock();
   return true;
 }
 
@@ -211,10 +231,12 @@ auto MetadataServer::get_block_map(inode_id_t id) -> std::vector<BlockInfo> {
 // {Your code here}
 auto MetadataServer::allocate_block(inode_id_t id) -> BlockInfo {
   // TODO: Implement this function.
+  mk_unlink_mutex.lock();
   mac_id_t machine_id = (this->generator).rand(1, this->num_data_servers);
   auto res = (this->clients_).at(machine_id)->call("alloc_block");
   if (res.is_err()) {
     // FIXME: how to handle error
+    mk_unlink_mutex.unlock();
     return BlockInfo(0, 0, 0);
   }
   auto [block_id, version] =
@@ -223,6 +245,7 @@ auto MetadataServer::allocate_block(inode_id_t id) -> BlockInfo {
   BlockInfo blockinfo(block_id, machine_id, version);
   // FIXME: how to handle error
   this->operation_->regular_add_blockinfo(id, blockinfo);
+  mk_unlink_mutex.unlock();
   return blockinfo;
 }
 
@@ -230,19 +253,24 @@ auto MetadataServer::allocate_block(inode_id_t id) -> BlockInfo {
 auto MetadataServer::free_block(inode_id_t id, block_id_t block_id,
                                 mac_id_t machine_id) -> bool {
   // TODO: Implement this function.
+  mk_unlink_mutex.lock();
   auto res = (this->clients_).at(machine_id)->call("free_block", block_id);
   if (res.is_err()) {
+    mk_unlink_mutex.unlock();
     return false;
   }
   bool res_value = res.unwrap()->as<bool>();
   if (!res_value) {
+    mk_unlink_mutex.unlock();
     return false;
   }
   ChfsNullResult inode_modify_res =
       this->operation_->regular_remove_blockinfo(id, block_id, machine_id);
   if (inode_modify_res.is_err()) {
+    mk_unlink_mutex.unlock();
     return false;
   }
+  mk_unlink_mutex.unlock();
   return true;
 }
 

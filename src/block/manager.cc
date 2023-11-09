@@ -99,20 +99,24 @@ auto BlockManager::write_block(block_id_t block_id, const u8 *data)
   // this->write_fail_cnt++;
 
   // TODO: Implement this function.
-  CHFS_ASSERT((block_id < this->block_cnt) && (block_id >= 0),
-              "the block_id is over!");
+  if (!((block_id < this->block_cnt) && (block_id >= 0))) {
+    return ChfsNullResult(ErrorType::INVALID_ARG);
+  }
+
   u64 offset = block_id * this->block_sz;
 
   if (this->in_memory) {
-    CHFS_ASSERT(memcpy(this->block_data + offset, data, this->block_sz) !=
-                    nullptr,
-                "memcpy error!");
+    memcpy(this->block_data + offset, data, this->block_sz);
   } else {
-    CHFS_ASSERT(lseek(this->fd, offset, SEEK_SET) != -1, "lseek error!");
-    CHFS_ASSERT(write(this->fd, data, this->block_sz) == this->block_sz,
-                "write error!");
+    if (lseek(this->fd, offset, SEEK_SET) == -1) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
+    if (write(this->fd, data, this->block_sz) != this->block_sz) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
   }
 
+  this->write_fail_cnt++;
   return KNullOk;
 }
 
@@ -131,36 +135,44 @@ auto BlockManager::write_partial_block(block_id_t block_id, const u8 *data,
   // this->write_fail_cnt++;
 
   // TODO: Implement this function.
-  CHFS_ASSERT((block_id < this->block_cnt) && (block_id >= 0),
-              "the block_id is over!");
+  if (!((block_id < this->block_cnt) && (block_id >= 0))) {
+    return ChfsNullResult(ErrorType::INVALID_ARG);
+  }
   u64 total_offset = block_id * this->block_sz + offset;
 
   if (this->in_memory) {
-    CHFS_ASSERT(memcpy(this->block_data + total_offset, data, len) != nullptr,
-                "memcpy error!");
+    memcpy(this->block_data + total_offset, data, len);
+
   } else {
-    CHFS_ASSERT(lseek(this->fd, total_offset, SEEK_SET) != -1, "lseek error!");
-    CHFS_ASSERT(write(this->fd, data, len) == len, "write error!");
+    if (lseek(this->fd, total_offset, SEEK_SET) == -1) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
+    if (write(this->fd, data, len) != len) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
   }
 
+  this->write_fail_cnt++;
   return KNullOk;
 }
 
 auto BlockManager::read_block(block_id_t block_id, u8 *data) -> ChfsNullResult {
 
   // TODO: Implement this function.
-  CHFS_ASSERT((block_id < this->block_cnt) && (block_id >= 0),
-              "the block_id is over!");
+  if (!((block_id < this->block_cnt) && (block_id >= 0))) {
+    return ChfsNullResult(ErrorType::INVALID_ARG);
+  }
   u64 offset = block_id * this->block_sz;
 
   if (this->in_memory) {
-    CHFS_ASSERT(memcpy(data, this->block_data + offset, this->block_sz) !=
-                    nullptr,
-                "memcpy error!");
+    memcpy(data, this->block_data + offset, this->block_sz);
   } else {
-    CHFS_ASSERT(lseek(this->fd, offset, SEEK_SET) != -1, "lseek error!");
-    CHFS_ASSERT(read(this->fd, data, this->block_sz) == this->block_sz,
-                "read error!");
+    if (lseek(this->fd, offset, SEEK_SET) == -1) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
+    if (read(this->fd, data, this->block_sz) != this->block_sz) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
   }
 
   return KNullOk;
@@ -169,20 +181,23 @@ auto BlockManager::read_block(block_id_t block_id, u8 *data) -> ChfsNullResult {
 auto BlockManager::zero_block(block_id_t block_id) -> ChfsNullResult {
 
   // TODO: Implement this function.
-  CHFS_ASSERT((block_id < this->block_cnt) && (block_id >= 0),
-              "the block_id is over!");
+  if (!((block_id < this->block_cnt) && (block_id >= 0))) {
+    return ChfsNullResult(ErrorType::INVALID_ARG);
+  }
   u64 offset = block_id * this->block_sz;
   u8 *zero_block = new u8[this->block_sz];
   memset(zero_block, 0, this->block_sz);
 
   if (this->in_memory) {
-    CHFS_ASSERT(memcpy(this->block_data + offset, zero_block, this->block_sz) !=
-                    nullptr,
-                "memcpy error!");
+    memcpy(this->block_data + offset, zero_block, this->block_sz);
+
   } else {
-    CHFS_ASSERT(lseek(this->fd, offset, SEEK_SET) != -1, "lseek error!");
-    CHFS_ASSERT(write(this->fd, zero_block, this->block_sz) == this->block_sz,
-                "write error!");
+    if (lseek(this->fd, offset, SEEK_SET) == -1) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
+    if (write(this->fd, zero_block, this->block_sz) != this->block_sz) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
   }
 
   delete[] zero_block;
