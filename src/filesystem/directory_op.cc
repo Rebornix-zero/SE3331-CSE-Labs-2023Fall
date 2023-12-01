@@ -1,7 +1,10 @@
-#include <algorithm>
-#include <sstream>
-
 #include "filesystem/directory_op.h"
+#include "common/config.h"
+#include <algorithm>
+#include <regex>
+#include <sstream>
+#include <string>
+#include <vector>
 
 namespace chfs {
 
@@ -42,8 +45,10 @@ auto append_to_directory(std::string src, std::string filename, inode_id_t id)
 
   // TODO: Implement this function.
   //       Append the new directory entry to `src`.
-  UNIMPLEMENTED();
-  
+  std::string entry =
+      (src.empty() ? "" : "/") + filename + ":" + std::to_string(id);
+  src += entry;
+
   return src;
 }
 
@@ -51,8 +56,20 @@ auto append_to_directory(std::string src, std::string filename, inode_id_t id)
 void parse_directory(std::string &src, std::list<DirectoryEntry> &list) {
 
   // TODO: Implement this function.
-  UNIMPLEMENTED();
-
+  if (src.empty()) {
+    return;
+  }
+  std::regex re("[:/]");
+  std::sregex_token_iterator it(src.begin(), src.end(), re, -1);
+  std::sregex_token_iterator end;
+  while (it != end) {
+    DirectoryEntry tmp;
+    tmp.name = *it;
+    it++;
+    tmp.id = std::stoull(*it);
+    it++;
+    list.push_back(tmp);
+  }
 }
 
 // {Your code here}
@@ -62,8 +79,16 @@ auto rm_from_directory(std::string src, std::string filename) -> std::string {
 
   // TODO: Implement this function.
   //       Remove the directory entry from `src`.
-  UNIMPLEMENTED();
-
+  std::list<DirectoryEntry> list(0);
+  parse_directory(src, list);
+  for (std::list<DirectoryEntry>::iterator it = list.begin(); it != list.end();
+       ++it) {
+    if (it->name == filename) {
+      list.erase(it);
+      break;
+    }
+  }
+  res = dir_list_to_string(list);
   return res;
 }
 
@@ -72,10 +97,15 @@ auto rm_from_directory(std::string src, std::string filename) -> std::string {
  */
 auto read_directory(FileOperation *fs, inode_id_t id,
                     std::list<DirectoryEntry> &list) -> ChfsNullResult {
-  
-  // TODO: Implement this function.
-  UNIMPLEMENTED();
 
+  // TODO: Implement this function.
+  ChfsResult<std::vector<u8>> res = fs->read_file(id);
+  if (res.is_err()) {
+    return ChfsNullResult(ErrorType::NotExist);
+  }
+  std::string content(reinterpret_cast<const char *>(res.unwrap().data()),
+                      res.unwrap().size());
+  parse_directory(content, list);
   return KNullOk;
 }
 
@@ -85,7 +115,14 @@ auto FileOperation::lookup(inode_id_t id, const char *name)
   std::list<DirectoryEntry> list;
 
   // TODO: Implement this function.
-  UNIMPLEMENTED();
+  std::string filename(name, strlen(name));
+  read_directory(this, id, list);
+  for (std::list<DirectoryEntry>::iterator it = list.begin(); it != list.end();
+       ++it) {
+    if (it->name == filename) {
+      return ChfsResult<inode_id_t>(it->id);
+    }
+  }
 
   return ChfsResult<inode_id_t>(ErrorType::NotExist);
 }
@@ -99,21 +136,85 @@ auto FileOperation::mk_helper(inode_id_t id, const char *name, InodeType type)
   //    If already exist, return ErrorType::AlreadyExist.
   // 2. Create the new inode.
   // 3. Append the new entry to the parent directory.
-  UNIMPLEMENTED();
+  std::list<DirectoryEntry> list;
+  std::string filename(name, strlen(name));
 
-  return ChfsResult<inode_id_t>(static_cast<inode_id_t>(0));
+  read_directory(this, id, list);
+  for (std::list<DirectoryEntry>::iterator it = list.begin(); it != list.end();
+       ++it) {
+    if (it->name == filename) {
+      std::cout << "already exit error" << std::endl;
+      return ChfsResult<inode_id_t>(ErrorType::AlreadyExist);
+    }
+  }
+
+  ChfsResult<block_id_t> block_id = block_allocator_->allocate();
+  if (block_id.is_err()) {
+    std::cout << "block allocate error" << std::endl;
+    return ChfsResult<inode_id_t>(ErrorType::OUT_OF_RESOURCE);
+  }
+  ChfsResult<inode_id_t> inode_id =
+      inode_manager_->allocate_inode(type, block_id.unwrap());
+  if (inode_id.is_err()) {
+    std::cout << "inode allocate error error" << std::endl;
+    return ChfsResult<inode_id_t>(ErrorType::OUT_OF_RESOURCE);
+  }
+
+  DirectoryEntry direntry;
+  direntry.name = filename;
+  direntry.id = inode_id.unwrap();
+  list.push_back(direntry);
+  std::string list_stirng = dir_list_to_string(list);
+  std::vector<u8> buffer(list_stirng.begin(), list_stirng.end());
+  write_file(id, buffer);
+  return ChfsResult<inode_id_t>(inode_id.unwrap());
 }
 
 // {Your code here}
 auto FileOperation::unlink(inode_id_t parent, const char *name)
     -> ChfsNullResult {
 
-  // TODO: 
+  // TODO:
   // 1. Remove the file, you can use the function `remove_file`
   // 2. Remove the entry from the directory.
-  UNIMPLEMENTED();
-  
-  return KNullOk;
+  std::list<DirectoryEntry> list;
+  std::string filename(name, strlen(name));
+  read_directory(this, parent, list);
+  for (std::list<DirectoryEntry>::iterator it = list.begin(); it != list.end();
+       ++it) {
+    if (it->name == filename) {
+      ChfsResult<InodeType> inode_type = gettype(it->id);
+      if (inode_type.unwrap() == InodeType::Directory) {
+        ChfsResult<FileAttr> attr = getattr(it->id);
+        u64 filesize = attr.unwrap().size;
+
+        if (filesize != 0) {
+          return ChfsNullResult(ErrorType::NotEmpty);
+        }
+
+        ChfsNullResult res = remove_file(it->id);
+        if (res.is_ok()) {
+          list.erase(it);
+          std::string list_stirng = dir_list_to_string(list);
+          std::vector<u8> buffer(list_stirng.begin(), list_stirng.end());
+          write_file(parent, buffer);
+          return KNullOk;
+        }
+      } else {
+        // unlink a file
+        ChfsNullResult res = remove_file(it->id);
+        // renew the parent dir entry
+        if (res.is_ok()) {
+          list.erase(it);
+          std::string list_stirng = dir_list_to_string(list);
+          std::vector<u8> buffer(list_stirng.begin(), list_stirng.end());
+          write_file(parent, buffer);
+          return KNullOk;
+        }
+      }
+    }
+  }
+  return ChfsNullResult(ErrorType::NotExist);
 }
 
 } // namespace chfs

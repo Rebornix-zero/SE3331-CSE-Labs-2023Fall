@@ -14,6 +14,9 @@
 #include "metadata/manager.h"
 #include <sys/stat.h>
 
+// MY_MODIFY:
+#include <list>
+
 namespace chfs {
 
 /**
@@ -21,6 +24,7 @@ namespace chfs {
  */
 class FileOperation {
   friend class MetadataServer;
+
 protected:
   // Feel free to remove them if you don't want to implement the inode-based
   // filesystem
@@ -185,6 +189,22 @@ public:
    * @return  ENOTEMPTY if the deleted file is a directory
    */
   auto unlink(inode_id_t parent, const char *name) -> ChfsNullResult;
+
+  // MY_MODIFY:
+  ChfsNullResult regular_add_blockinfo(inode_id_t regular_id,
+                                       BlockInfo &blockinfo);
+  // MY_MODIFY:
+  ChfsNullResult regular_remove_blockinfo(inode_id_t regular_id,
+                                          block_id_t block_id,
+                                          mac_id_t machine_id);
+
+  // MY_MODIFY:
+  ChfsNullResult
+  regular_get_blockinfo_list(inode_id_t regular_id,
+                             std::vector<BlockInfo> &return_data);
+  // MY_MODIFY:
+  ChfsNullResult regular_unlink_wo_block(inode_id_t parent,
+                                         const std::string &name);
 
 private:
   FileOperation(std::shared_ptr<BlockManager> bm,
