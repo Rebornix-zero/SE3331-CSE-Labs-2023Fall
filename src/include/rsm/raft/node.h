@@ -244,13 +244,13 @@ RaftNode<StateMachine, Command>::RaftNode(int node_id,
 template <typename StateMachine, typename Command>
 RaftNode<StateMachine, Command>::~RaftNode() {
   stop();
-
   thread_pool.reset();
   rpc_server.reset();
   state.reset();
   log_storage.reset();
 
   /* Lab3: Your code here */
+  this->bm.reset();
 }
 
 /******************************************************************
@@ -393,7 +393,7 @@ auto RaftNode<StateMachine, Command>::new_command(std::vector<u8> cmd_data,
     tmp.logic_index = next_log_index;
     this->log_list.push_back(tmp);
     lock.unlock();
-    RAFT_LOG("Leader add log %d", next_log_index);
+    // RAFT_LOG("Leader add log %d", next_log_index);
     return std::make_tuple(true, this->current_term, next_log_index);
   } else {
     lock.unlock();
@@ -423,7 +423,7 @@ auto RaftNode<StateMachine, Command>::get_snapshot() -> std::vector<u8> {
 template <typename StateMachine, typename Command>
 auto RaftNode<StateMachine, Command>::request_vote(RequestVoteArgs args)
     -> RequestVoteReply {
-  RAFT_LOG("request_vote");
+  // RAFT_LOG("request_vote");
   /* Lab3: Your code here */
   RequestVoteReply reply;
   std::unique_lock<std::mutex> lock(this->mtx);
@@ -450,7 +450,7 @@ auto RaftNode<StateMachine, Command>::request_vote(RequestVoteArgs args)
   if (term_bo && votefor_bo && log_complete_bo) {
     // 可以投票
     // 更新心跳时间
-    RAFT_LOG("vote to %d", args.candidate_id);
+    // RAFT_LOG("vote to %d", args.candidate_id);
     this->renew_heartbeat_time();
     reply.vote_granted = true;
     this->leader_id = args.candidate_id;
@@ -467,7 +467,7 @@ template <typename StateMachine, typename Command>
 void RaftNode<StateMachine, Command>::handle_request_vote_reply(
     int target, const RequestVoteArgs arg, const RequestVoteReply reply) {
   /* Lab3: Your code here */
-  RAFT_LOG("handle_request_vote_reply");
+  // RAFT_LOG("handle_request_vote_reply");
   std::unique_lock<std::mutex> lock(this->mtx);
   // 检查是否任期过期，是否卸任
   if (reply.vote_term > this->current_term) {
@@ -508,7 +508,7 @@ template <typename StateMachine, typename Command>
 auto RaftNode<StateMachine, Command>::append_entries(
     RpcAppendEntriesArgs rpc_arg) -> AppendEntriesReply {
   /* Lab3: Your code here */
-  RAFT_LOG("append_entries");
+  // RAFT_LOG("append_entries");
   AppendEntriesReply result;
   result.success = false;
   AppendEntriesArgs<Command> arg =
@@ -593,7 +593,7 @@ template <typename StateMachine, typename Command>
 void RaftNode<StateMachine, Command>::handle_append_entries_reply(
     int node_id, const AppendEntriesArgs<Command> arg,
     const AppendEntriesReply reply) {
-  RAFT_LOG("handle_append_entries_reply");
+  // RAFT_LOG("handle_append_entries_reply");
   std::unique_lock<std::mutex> lock(this->mtx);
   // 更新term信息，并选择是否卸任
   if (reply.term > this->current_term) {
@@ -769,7 +769,7 @@ void RaftNode<StateMachine, Command>::run_background_election() {
         this->current_term += 1;
         this->agree_num = 1; // 投自己一票
         this->leader_id = this->my_id;
-        RAFT_LOG("Become candidate");
+        // RAFT_LOG("Become candidate");
         this->renew_start_election_time();
         this->time_out_election = this->restart_random_time_out(300, 150);
         for (int i = 0; i < this->rpc_clients_map.size(); ++i) {
