@@ -124,7 +124,8 @@ private:
   std::mutex mtx;         /* A big lock to protect the whole data structure. */
   std::mutex clients_mtx; /* A lock to protect RpcClient pointers */
   std::unique_ptr<ThreadPool> thread_pool;
-  std::unique_ptr<RaftLog<Command>> log_storage; /* To persist the raft log. */
+  std::unique_ptr<RaftLog<StateMachine, Command>>
+      log_storage;                     /* To persist the raft log. */
   std::unique_ptr<StateMachine> state; /*  The state machine that applies the
                                           raft log, e.g. a kv store. */
 
@@ -175,6 +176,9 @@ private:
   auto index_logic2phy(int logic) -> int;
   auto index_phy2logic(int phy) -> int;
   auto get_clients_num() -> int;
+  auto persist_metadata() -> bool;
+  auto persist_log() -> bool;
+  auto persist_snapshot() -> bool;
 };
 
 template <typename StateMachine, typename Command>
@@ -219,18 +223,30 @@ RaftNode<StateMachine, Command>::RaftNode(int node_id,
   this->bm = std::make_shared<BlockManager>("/tmp/raft_log/data" +
                                             std::to_string(this->my_id));
   this->thread_pool = std::make_unique<ThreadPool>(32);
-  this->log_storage = std::make_unique<RaftLog<Command>>(this->bm);
+  this->log_storage =
+      std::make_unique<RaftLog<StateMachine, Command>>(this->bm);
   this->state = std::make_unique<StateMachine>();
 
-  // 头节点推入
-  LogEntry<Command> obj;
-  obj.logic_index = 0;
-  obj.term = 0;
-  this->log_list.push_back(obj);
+  // 对于持久化存储数据，如果需要恢复，则恢复，否则自己初始化
+  if (this->log_storage->need_recover()) {
+    this->log_storage->recover(this->current_term, this->leader_id,
+                               this->log_list, this->state);
+    this->max_apply_idx = this->log_list[0].logic_index;
+    this->max_commit_idx = this->log_list[0].logic_index;
+    RAFT_LOG("Recover, the log size %d,commit %d, apply %d",
+             (int)(this->log_list.size()), this->max_commit_idx,
+             this->max_apply_idx);
+  } else {
+    // 无需恢复
+    LogEntry<Command> obj;
+    obj.logic_index = 0;
+    obj.term = 0;
+    this->log_list.push_back(obj);
+    this->max_commit_idx = 0;
+    this->max_apply_idx = 0;
+  }
 
   this->agree_num = 0;
-  this->max_commit_idx = 0;
-  this->max_apply_idx = 0;
   this->next_index.resize(this->node_configs.size());
   this->match_index.resize(this->node_configs.size());
   this->last_received_heartbeat_RPC_time = this->get_time();
@@ -263,8 +279,6 @@ RaftNode<StateMachine, Command>::~RaftNode() {
 template <typename StateMachine, typename Command>
 auto RaftNode<StateMachine, Command>::get_last_log_term() -> int {
   int size = this->log_list.size();
-  if (size == 0)
-    return 0;
   LogEntry<Command> last_log_entry = log_list[size - 1];
   return last_log_entry.term;
 }
@@ -272,8 +286,6 @@ auto RaftNode<StateMachine, Command>::get_last_log_term() -> int {
 template <typename StateMachine, typename Command>
 auto RaftNode<StateMachine, Command>::get_last_log_index() -> int {
   int size = this->log_list.size();
-  if (size == 0)
-    return 0;
   LogEntry<Command> last_log_entry = log_list[size - 1];
   return last_log_entry.logic_index;
 }
@@ -307,10 +319,11 @@ auto RaftNode<StateMachine, Command>::renew_start_election_time() -> void {
 
 template <typename StateMachine, typename Command>
 auto RaftNode<StateMachine, Command>::index_logic2phy(int logic) -> int {
-  if (logic < 0) {
+  int head_idx = this->log_list[0].logic_index;
+  if (logic < head_idx) {
     return -1;
   }
-  return logic;
+  return logic - head_idx;
 }
 
 template <typename StateMachine, typename Command>
@@ -325,6 +338,25 @@ template <typename StateMachine, typename Command>
 auto RaftNode<StateMachine, Command>::get_clients_num() -> int {
   return this->rpc_clients_map.size();
 }
+
+template <typename StateMachine, typename Command>
+auto RaftNode<StateMachine, Command>::persist_metadata() -> bool {
+  return this->log_storage->persist_metadata(this->current_term,
+                                             this->leader_id);
+}
+
+template <typename StateMachine, typename Command>
+auto RaftNode<StateMachine, Command>::persist_log() -> bool {
+  return this->log_storage->persist_log(this->log_list);
+}
+
+template <typename StateMachine, typename Command>
+auto RaftNode<StateMachine, Command>::persist_snapshot() -> bool {
+  std::vector<u8> data = this->state->snapshot();
+  return this->log_storage->persist_snapshot(this->log_list[0].logic_index,
+                                             this->log_list[0].term, data);
+}
+
 // MY_MODIFY: fun imp end
 
 template <typename StateMachine, typename Command>
@@ -392,6 +424,7 @@ auto RaftNode<StateMachine, Command>::new_command(std::vector<u8> cmd_data,
     tmp.term = this->current_term;
     tmp.logic_index = next_log_index;
     this->log_list.push_back(tmp);
+    this->persist_log();
     lock.unlock();
     // RAFT_LOG("Leader add log %d", next_log_index);
     return std::make_tuple(true, this->current_term, next_log_index);
@@ -405,13 +438,58 @@ auto RaftNode<StateMachine, Command>::new_command(std::vector<u8> cmd_data,
 template <typename StateMachine, typename Command>
 auto RaftNode<StateMachine, Command>::save_snapshot() -> bool {
   /* Lab3: Your code here */
+  // 上锁
+  std::unique_lock<std::mutex> lock(this->mtx);
+  // 没有apply的log全部apply
+  for (int i = this->index_logic2phy(this->max_apply_idx) + 1;
+       i <= this->index_logic2phy(this->max_commit_idx); ++i) {
+    // 检测物理地址合法
+    if (i >= 1 && i < this->log_list.size()) {
+      // 合法，apply log
+      this->state->apply_log(this->log_list[i].content);
+    } else {
+      // 不合法，报错，退出(一般不会报这个错误)
+      RAFT_LOG("Invalid in apply");
+      return false;
+    }
+  }
+  // 更新apply idx
+  this->max_apply_idx = this->max_commit_idx;
+  // 更新log
+  this->log_list[0].term =
+      this->log_list[this->index_logic2phy(this->max_commit_idx)].term;
+  this->log_list[0].logic_index = this->max_commit_idx;
+  for (auto it = this->log_list.begin() + 1; it != this->log_list.end();) {
+    if ((*it).logic_index <= this->max_commit_idx) {
+      it = this->log_list.erase(it);
+    } else {
+      break;
+    }
+  }
+  RAFT_LOG("size %d", (int)this->log_list.size());
+  // 若为leader更新next idx
+  if (this->role == RaftRole::Leader) {
+    for (int i = 0; i < this->rpc_clients_map.size(); ++i) {
+      this->next_index[i] = this->max_commit_idx + 1;
+    }
+  }
+
+  // 持久化存储
+  this->persist_snapshot();
+  this->persist_log();
+
+  RAFT_LOG("State save,app raw idx %d,commit raw idx %d",
+           this->index_logic2phy(this->max_apply_idx),
+           this->index_logic2phy(this->max_commit_idx));
+
+  lock.unlock();
   return true;
 }
 
 template <typename StateMachine, typename Command>
 auto RaftNode<StateMachine, Command>::get_snapshot() -> std::vector<u8> {
   /* Lab3: Your code here */
-  return std::vector<u8>();
+  return this->get_snapshot_direct();
 }
 
 /******************************************************************
@@ -425,12 +503,19 @@ auto RaftNode<StateMachine, Command>::request_vote(RequestVoteArgs args)
     -> RequestVoteReply {
   // RAFT_LOG("request_vote");
   /* Lab3: Your code here */
+  // RAFT_LOG("receive vote request from %d, its term %d, its log term %d, its "
+  //          "log index %d, my log term %d, my log index %d",
+  //          args.candidate_id, args.candidate_term, args.last_log_term,
+  //          args.last_log_index, this->get_last_log_term(),
+  //          this->get_last_log_index());
   RequestVoteReply reply;
   std::unique_lock<std::mutex> lock(this->mtx);
+  bool metadata_change = false;
   // 查看是否更新本地任期与卸任
   if (args.candidate_term > this->current_term) {
     this->current_term = args.candidate_term;
     this->leader_id = -1;
+    metadata_change = true;
     this->role = RaftRole::Follower;
     this->agree_num = 0;
     this->time_out_heartbeat = this->restart_random_time_out(300, 150);
@@ -454,10 +539,14 @@ auto RaftNode<StateMachine, Command>::request_vote(RequestVoteArgs args)
     this->renew_heartbeat_time();
     reply.vote_granted = true;
     this->leader_id = args.candidate_id;
+    metadata_change = true;
     this->role = RaftRole::Follower;
   } else {
     // 拒绝投票
     reply.vote_granted = false;
+  }
+  if (metadata_change) {
+    this->persist_metadata();
   }
   lock.unlock();
   return reply;
@@ -469,11 +558,13 @@ void RaftNode<StateMachine, Command>::handle_request_vote_reply(
   /* Lab3: Your code here */
   // RAFT_LOG("handle_request_vote_reply");
   std::unique_lock<std::mutex> lock(this->mtx);
+  bool metadata_change = false;
   // 检查是否任期过期，是否卸任
   if (reply.vote_term > this->current_term) {
     // 更新当前时期，并卸任
     this->current_term = reply.vote_term;
     this->leader_id = -1;
+    metadata_change = true;
     this->role = RaftRole::Follower;
     this->agree_num = 0;
     this->time_out_heartbeat = this->restart_random_time_out(300, 150);
@@ -499,7 +590,9 @@ void RaftNode<StateMachine, Command>::handle_request_vote_reply(
   } else {
     // 拒绝投票
   }
-
+  if (metadata_change) {
+    this->persist_metadata();
+  }
   lock.unlock();
   return;
 }
@@ -514,12 +607,14 @@ auto RaftNode<StateMachine, Command>::append_entries(
   AppendEntriesArgs<Command> arg =
       transform_rpc_append_entries_args<Command>(rpc_arg);
   std::unique_lock<std::mutex> lock(this->mtx);
+  bool metadata_change = true;
   // leader,follower检测是否有大于等于的term,如果是，则卸任/更改leader
   if (arg.leader_term >= this->current_term) {
     this->current_term = arg.leader_term;
     this->role = RaftRole::Follower;
     this->agree_num = 0;
     this->leader_id = arg.leader_id;
+    metadata_change = true;
     this->time_out_heartbeat = this->restart_random_time_out(300, 150);
     this->renew_heartbeat_time();
   }
@@ -537,6 +632,9 @@ auto RaftNode<StateMachine, Command>::append_entries(
           (this->log_list)[phy_log_index].term != arg.prev_log_term) {
         // rpc逻辑地址不合法，物理地址越界，物理地址对应的log
         // term不一致，拒绝(情况2)
+        if (metadata_change) {
+          this->persist_metadata();
+        }
         lock.unlock();
         result.term = current_term;
         return result;
@@ -551,6 +649,9 @@ auto RaftNode<StateMachine, Command>::append_entries(
           (this->log_list)[phy_log_index].term != arg.prev_log_term) {
         // rpc逻辑地址不合法，物理地址越界，物理地址对应的log
         // term不一致，拒绝(情况2)
+        if (metadata_change) {
+          this->persist_metadata();
+        }
         lock.unlock();
         result.term = current_term;
         return result;
@@ -577,11 +678,16 @@ auto RaftNode<StateMachine, Command>::append_entries(
           ++last_new_entry_index;
         }
       }
+      // log持久化
+      this->persist_log();
     }
     // 更新本机commit_idx
     if (arg.leader_commit > this->max_commit_idx) {
       this->max_commit_idx = std::min(arg.leader_commit, last_new_entry_index);
     }
+  }
+  if (metadata_change) {
+    this->persist_metadata();
   }
   // 准备返回
   lock.unlock();
@@ -595,16 +701,21 @@ void RaftNode<StateMachine, Command>::handle_append_entries_reply(
     const AppendEntriesReply reply) {
   // RAFT_LOG("handle_append_entries_reply");
   std::unique_lock<std::mutex> lock(this->mtx);
+  bool metadata_change = false;
   // 更新term信息，并选择是否卸任
   if (reply.term > this->current_term) {
     this->current_term = reply.term;
     this->role = RaftRole::Follower;
     this->leader_id = -1;
+    metadata_change = true;
     this->time_out_heartbeat = this->restart_random_time_out(300, 150);
     this->renew_heartbeat_time();
   }
   // 若更新后不为leader，则无需处理reply
   if (this->role != RaftRole::Leader) {
+    if (metadata_change) {
+      this->persist_metadata();
+    }
     lock.unlock();
     return;
   }
@@ -615,10 +726,11 @@ void RaftNode<StateMachine, Command>::handle_append_entries_reply(
       // 更新next_index，match_index表
       this->match_index[node_id] = arg.entries.size() + arg.prev_log_index;
       this->next_index[node_id] = this->match_index[node_id] + 1;
-      RAFT_LOG("follower id:%d, prev index %d, entries num %d, match index %d, "
-               "next index %d",
-               node_id, arg.prev_log_index, (int)arg.entries.size(),
-               this->match_index[node_id], this->next_index[node_id]);
+      // RAFT_LOG("follower id:%d, prev index %d, entries num %d, match index
+      // %d, "
+      //          "next index %d",
+      //          node_id, arg.prev_log_index, (int)arg.entries.size(),
+      //          this->match_index[node_id], this->next_index[node_id]);
       // 更新commit_index
       for (int i = this->index_logic2phy(this->max_commit_idx + 1);
            i < this->log_list.size(); ++i) {
@@ -639,13 +751,32 @@ void RaftNode<StateMachine, Command>::handle_append_entries_reply(
         // 检查该log是否可以commit
         if (cnt >= (this->get_clients_num() / 2) + 1) {
           // 可以更新commit_idx
-          this->max_commit_idx = this->index_logic2phy(i);
+          this->max_commit_idx = logic_log_index;
         }
       }
     }
   } else {
     // 失败
-    this->next_index[node_id] -= 1;
+    // 如果next idx的物理地址为1且pre idx仍未匹配失败，则要install
+    // snapshot,否则next idx--
+    if (this->index_logic2phy(this->next_index[node_id]) == 1) {
+      InstallSnapshotArgs obj;
+      obj.leader_id = this->my_id;
+      obj.leader_term = this->current_term;
+      obj.last_include_index = this->log_list[0].logic_index;
+      obj.last_include_term = this->log_list[0].term;
+      obj.snapshot_data = this->state->snapshot();
+      this->thread_pool->enqueue(&RaftNode::send_install_snapshot, this,
+                                 node_id, obj);
+      RAFT_LOG("send snapshot to %d", node_id);
+    } else {
+      this->next_index[node_id] -= 1;
+      RAFT_LOG("%d next idx --,the after idx: %d", node_id,
+               this->next_index[node_id]);
+    }
+  }
+  if (metadata_change) {
+    this->persist_metadata();
   }
   lock.unlock();
   return;
@@ -655,7 +786,51 @@ template <typename StateMachine, typename Command>
 auto RaftNode<StateMachine, Command>::install_snapshot(InstallSnapshotArgs args)
     -> InstallSnapshotReply {
   /* Lab3: Your code here */
-  return InstallSnapshotReply();
+  // 上锁
+  InstallSnapshotReply result;
+  std::unique_lock<std::mutex> lock(this->mtx);
+  // 检查term,如果大于等于则要同步/卸任
+  if (args.leader_term >= this->current_term) {
+    this->current_term = args.leader_term;
+    this->role = RaftRole::Follower;
+    this->agree_num = 0;
+    this->leader_id = args.leader_id;
+    this->persist_metadata();
+    this->time_out_heartbeat = this->restart_random_time_out(300, 150);
+    this->renew_heartbeat_time();
+  }
+  if (this->current_term == args.leader_term) {
+    // 更新接受心跳rpc的时间
+    this->renew_heartbeat_time();
+  }
+  // 检测该请求的资格是否足够，若足够则可以安装snapshot
+  if (this->current_term == args.leader_term &&
+      args.last_include_index > this->log_list[0].logic_index) {
+    // 状态机更新
+    this->state->apply_snapshot(args.snapshot_data);
+    // log更新
+    this->log_list[0].term = args.last_include_term;
+    this->log_list[0].logic_index = args.last_include_index;
+    for (auto it = this->log_list.begin() + 1; it != this->log_list.end();) {
+      if ((*it).logic_index <= args.last_include_index) {
+        it = this->log_list.erase(it);
+      } else {
+        break;
+      }
+    }
+    // apply idx和commit idx更新
+    this->max_apply_idx = args.last_include_index;
+    this->max_commit_idx =
+        std::max(args.last_include_index, this->max_commit_idx);
+    // 上述更新持久化存储
+    this->persist_snapshot();
+    this->persist_metadata();
+    RAFT_LOG("it can install snapshot, apply idx %d, commit idx %d",
+             this->max_apply_idx, this->max_commit_idx);
+  }
+  result.term = this->current_term;
+  lock.unlock();
+  return result;
 }
 
 template <typename StateMachine, typename Command>
@@ -663,6 +838,30 @@ void RaftNode<StateMachine, Command>::handle_install_snapshot_reply(
     int node_id, const InstallSnapshotArgs arg,
     const InstallSnapshotReply reply) {
   /* Lab3: Your code here */
+  // 上锁
+  std::unique_lock<std::mutex> lock(this->mtx);
+  // 更新term信息，并选择是否卸任
+  if (reply.term > this->current_term) {
+    this->current_term = reply.term;
+    this->role = RaftRole::Follower;
+    this->leader_id = -1;
+    this->persist_metadata();
+    this->time_out_heartbeat = this->restart_random_time_out(300, 150);
+    this->renew_heartbeat_time();
+  }
+  // 根据返回情况选择是否更新对应的next idx和match idx
+  if (this->role == RaftRole::Leader) {
+    this->match_index[node_id] =
+        std::max(arg.last_include_index, this->match_index[node_id]);
+    this->next_index[node_id] = this->match_index[node_id] + 1;
+    RAFT_LOG("handle_install_snapshot_reply ,nid %d, next idx %d, match idx %d",
+             node_id, this->next_index[node_id], this->match_index[node_id]);
+    // 不需要更新本地commit:
+    // arg.last_include_index作为snapshot中的一个index,
+    // 其已经是commit的, match_index本次的更新将不能会引发commit_idx的改变
+  }
+
+  lock.unlock();
   return;
 }
 
@@ -755,6 +954,7 @@ void RaftNode<StateMachine, Command>::run_background_election() {
       }
       /* Lab3: Your code here */
       std::unique_lock<std::mutex> lock(this->mtx);
+      bool metadata_change = false;
       // 检查是否超时，如果超时则成为下一term的candidate
       bool follow_over =
           ((this->role == RaftRole::Follower) &&
@@ -769,6 +969,7 @@ void RaftNode<StateMachine, Command>::run_background_election() {
         this->current_term += 1;
         this->agree_num = 1; // 投自己一票
         this->leader_id = this->my_id;
+        metadata_change = true;
         // RAFT_LOG("Become candidate");
         this->renew_start_election_time();
         this->time_out_election = this->restart_random_time_out(300, 150);
@@ -783,6 +984,9 @@ void RaftNode<StateMachine, Command>::run_background_election() {
           this->thread_pool->enqueue(&RaftNode::send_request_vote, this, i,
                                      request_vote_arg);
         }
+      }
+      if (metadata_change) {
+        this->persist_metadata();
       }
       lock.unlock();
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -824,6 +1028,10 @@ void RaftNode<StateMachine, Command>::run_background_commit() {
           tmp.prev_log_index = this->next_index[i] - 1;
           tmp.prev_log_term = (this->log_list)[pre_index_raw].term;
           tmp.leader_commit = this->max_commit_idx;
+          RAFT_LOG("send commit to %d, pre index %d, pre term %d, log size %d, "
+                   "leader commit %d",
+                   i, tmp.prev_log_index, tmp.prev_log_term,
+                   (int)tmp.entries.size(), tmp.leader_commit);
           this->thread_pool->enqueue(&RaftNode::send_append_entries, this, i,
                                      tmp);
         }
@@ -850,6 +1058,8 @@ void RaftNode<StateMachine, Command>::run_background_apply() {
       }
       /* Lab3: Your code here */
       std::unique_lock<std::mutex> lock(this->mtx);
+      RAFT_LOG("APPLY, commit %d, apply %d", this->max_commit_idx,
+               this->max_apply_idx);
       for (int phy_log_idx = this->index_logic2phy(this->max_apply_idx + 1),
                i = this->max_apply_idx + 1;
            i <= this->max_commit_idx; ++phy_log_idx, ++i) {
@@ -908,6 +1118,9 @@ void RaftNode<StateMachine, Command>::run_background_ping() {
               (this->log_list)[this->index_logic2phy(this->next_index[i] - 1)]
                   .term;
           tmp.leader_commit = this->max_commit_idx;
+          RAFT_LOG(
+              "send ping to %d, pre index %d, pre term %d, leader commit %d", i,
+              tmp.prev_log_index, tmp.prev_log_term, tmp.leader_commit);
           this->thread_pool->enqueue(&RaftNode::send_append_entries, this, i,
                                      tmp);
         }

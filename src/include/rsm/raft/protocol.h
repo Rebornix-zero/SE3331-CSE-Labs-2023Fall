@@ -112,18 +112,19 @@ struct AppendEntriesReply {
 
 struct InstallSnapshotArgs {
   /* Lab3: Your code here */
-
-  MSGPACK_DEFINE(
-
-  )
+  int leader_term;
+  int leader_id;
+  int last_include_index;
+  int last_include_term;
+  std::vector<u8> snapshot_data;
+  MSGPACK_DEFINE(leader_term, leader_id, last_include_index, last_include_term,
+                 snapshot_data)
 };
 
 struct InstallSnapshotReply {
   /* Lab3: Your code here */
-
-  MSGPACK_DEFINE(
-
-  )
+  int term;
+  MSGPACK_DEFINE(term)
 };
 
 } /* namespace chfs */
