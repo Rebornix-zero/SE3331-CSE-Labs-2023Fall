@@ -59,9 +59,11 @@ public:
 
   bool is_checkpoint_enabled_;
   std::shared_ptr<BlockManager> bm_;
+  usize log_num;
   /**
    * {Append anything if you need}
    */
+  void log_num_add() { this->log_num += 1; }
 };
 
 } // namespace chfs

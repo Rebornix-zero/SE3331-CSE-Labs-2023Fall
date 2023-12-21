@@ -1,8 +1,7 @@
 #pragma once
 
-#include <list>
-
 #include "./operations.h"
+#include <list>
 
 // Helper functions to add a directory layer atop of the file
 

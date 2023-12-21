@@ -76,12 +76,30 @@ BlockManager::BlockManager(const std::string &file, usize block_cnt)
   CHFS_ASSERT(this->block_data != MAP_FAILED, "Failed to mmap the data");
 }
 
-BlockManager::BlockManager(const std::string &file, usize block_cnt, bool is_log_enabled)
+BlockManager::BlockManager(const std::string &file, usize block_cnt,
+                           bool is_log_enabled)
     : file_name_(file), block_cnt(block_cnt), in_memory(false) {
   this->write_fail_cnt = 0;
   this->maybe_failed = false;
   // TODO: Implement this function.
-  UNIMPLEMENTED();    
+  // NOTE: naive implementation
+  // UNIMPLEMENTED();
+  this->fd = open(file.c_str(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+  CHFS_ASSERT(this->fd != -1, "Failed to open the block manager file");
+
+  auto file_sz = get_file_sz(this->file_name_);
+  if (file_sz == 0) {
+    initialize_file(this->fd, this->total_storage_sz());
+  } else {
+    this->block_cnt = file_sz / this->block_sz;
+    CHFS_ASSERT(this->total_storage_sz() == KDefaultBlockCnt * this->block_sz,
+                "The file size mismatches");
+  }
+
+  this->block_data =
+      static_cast<u8 *>(mmap(nullptr, this->total_storage_sz(),
+                             PROT_READ | PROT_WRITE, MAP_SHARED, this->fd, 0));
+  CHFS_ASSERT(this->block_data != MAP_FAILED, "Failed to mmap the data");
 }
 
 auto BlockManager::write_block(block_id_t block_id, const u8 *data)
@@ -92,10 +110,29 @@ auto BlockManager::write_block(block_id_t block_id, const u8 *data)
       return ErrorType::INVALID;
     }
   }
-  
+
+  // // TODO: Implement this function.
+  // UNIMPLEMENTED();
+  // this->write_fail_cnt++;
 
   // TODO: Implement this function.
-  UNIMPLEMENTED();
+  if (!((block_id < this->block_cnt) && (block_id >= 0))) {
+    return ChfsNullResult(ErrorType::INVALID_ARG);
+  }
+
+  u64 offset = block_id * this->block_sz;
+
+  if (this->in_memory) {
+    memcpy(this->block_data + offset, data, this->block_sz);
+  } else {
+    if (lseek(this->fd, offset, SEEK_SET) == -1) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
+    if (write(this->fd, data, this->block_sz) != this->block_sz) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
+  }
+
   this->write_fail_cnt++;
   return KNullOk;
 }
@@ -110,8 +147,28 @@ auto BlockManager::write_partial_block(block_id_t block_id, const u8 *data,
     }
   }
 
+  // // TODO: Implement this function.
+  // UNIMPLEMENTED();
+  // this->write_fail_cnt++;
+
   // TODO: Implement this function.
-  UNIMPLEMENTED();
+  if (!((block_id < this->block_cnt) && (block_id >= 0))) {
+    return ChfsNullResult(ErrorType::INVALID_ARG);
+  }
+  u64 total_offset = block_id * this->block_sz + offset;
+
+  if (this->in_memory) {
+    memcpy(this->block_data + total_offset, data, len);
+
+  } else {
+    if (lseek(this->fd, total_offset, SEEK_SET) == -1) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
+    if (write(this->fd, data, len) != len) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
+  }
+
   this->write_fail_cnt++;
   return KNullOk;
 }
@@ -119,16 +176,48 @@ auto BlockManager::write_partial_block(block_id_t block_id, const u8 *data,
 auto BlockManager::read_block(block_id_t block_id, u8 *data) -> ChfsNullResult {
 
   // TODO: Implement this function.
-  UNIMPLEMENTED();
+  if (!((block_id < this->block_cnt) && (block_id >= 0))) {
+    return ChfsNullResult(ErrorType::INVALID_ARG);
+  }
+  u64 offset = block_id * this->block_sz;
+
+  if (this->in_memory) {
+    memcpy(data, this->block_data + offset, this->block_sz);
+  } else {
+    if (lseek(this->fd, offset, SEEK_SET) == -1) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
+    if (read(this->fd, data, this->block_sz) != this->block_sz) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
+  }
 
   return KNullOk;
 }
 
 auto BlockManager::zero_block(block_id_t block_id) -> ChfsNullResult {
-  
-  // TODO: Implement this function.
-  UNIMPLEMENTED();
 
+  // TODO: Implement this function.
+  if (!((block_id < this->block_cnt) && (block_id >= 0))) {
+    return ChfsNullResult(ErrorType::INVALID_ARG);
+  }
+  u64 offset = block_id * this->block_sz;
+  u8 *zero_block = new u8[this->block_sz];
+  memset(zero_block, 0, this->block_sz);
+
+  if (this->in_memory) {
+    memcpy(this->block_data + offset, zero_block, this->block_sz);
+
+  } else {
+    if (lseek(this->fd, offset, SEEK_SET) == -1) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
+    if (write(this->fd, zero_block, this->block_sz) != this->block_sz) {
+      return ChfsNullResult(ErrorType::DONE);
+    }
+  }
+
+  delete[] zero_block;
   return KNullOk;
 }
 
@@ -138,14 +227,15 @@ auto BlockManager::sync(block_id_t block_id) -> ChfsNullResult {
   }
 
   auto res = msync(this->block_data + block_id * this->block_sz, this->block_sz,
-        MS_SYNC | MS_INVALIDATE);
+                   MS_SYNC | MS_INVALIDATE);
   if (res != 0)
     return ChfsNullResult(ErrorType::INVALID);
   return KNullOk;
 }
 
 auto BlockManager::flush() -> ChfsNullResult {
-  auto res = msync(this->block_data, this->block_sz * this->block_cnt, MS_SYNC | MS_INVALIDATE);
+  auto res = msync(this->block_data, this->block_sz * this->block_cnt,
+                   MS_SYNC | MS_INVALIDATE);
   if (res != 0)
     return ChfsNullResult(ErrorType::INVALID);
   return KNullOk;
