@@ -63,13 +63,16 @@ auto ChfsClient::lookup(inode_id_t parent, const std::string &name)
   // TODO: Implement this function.
   auto lookup_res = this->metadata_server_->call("lookup", parent, name);
   if (lookup_res.is_err()) {
+    std::cout << "Error1" << std::endl;
     return ChfsResult<inode_id_t>(lookup_res.unwrap_error());
   }
   inode_id_t inode_id = lookup_res.unwrap()->as<inode_id_t>();
-  if (inode_id == 0)
+  if (inode_id == 0) {
+    std::cout << "Error2" << std::endl;
     return ChfsResult<inode_id_t>(ErrorType::NotExist);
-  else
+  } else {
     return ChfsResult<inode_id_t>(inode_id);
+  }
 }
 
 // {Your code here}
