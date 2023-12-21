@@ -71,10 +71,10 @@ private:
   enum taskState { WAIT, EXECUTE, FINFISH };
 
   struct MapTask {
-    std::string src_file;
+    std::vector<std::string> src_file;
     taskState state;
-    MapTask(std::string file) {
-      this->src_file = file;
+    MapTask(std::vector<std::string> file_list) {
+      this->src_file = file_list;
       this->state = taskState::WAIT;
     }
   };

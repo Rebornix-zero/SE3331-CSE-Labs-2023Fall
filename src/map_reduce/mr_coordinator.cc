@@ -28,12 +28,11 @@ Coordinator::askTask() {
       if (map_task_list[i].state == taskState::WAIT) {
         map_task_list[i].state = taskState::EXECUTE;
         // 申请新的中间文件
-        std::string inter_file = "inter_" + map_task_list[i].src_file;
+        std::string inter_file = "inter_" + map_task_list[i].src_file[0];
         chfs_client->mknode(chfs::ChfsClient::FileType::REGULAR, 1, inter_file);
         uniqueLock.unlock();
-        return std::make_tuple(
-            i, (int)(mr_tasktype::MAP),
-            std::vector<std::string>(1, map_task_list[i].src_file), inter_file);
+        return std::make_tuple(i, (int)(mr_tasktype::MAP),
+                               map_task_list[i].src_file, inter_file);
       }
     }
   } else {
@@ -102,9 +101,7 @@ Coordinator::Coordinator(MR_CoordinatorConfig config,
   this->reduce_finish_num = 0;
   this->worker_num = nReduce;
   // 根据files内容，对每个input文件创建一个map task
-  for (auto &file : files) {
-    map_task_list.emplace_back(file);
-  }
+  map_task_list.emplace_back(files);
   chfs_client = config.client;
 
   rpc_server =
